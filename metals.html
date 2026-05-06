@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Metals Converter</title>
+    <link rel="stylesheet" href="/styles/styles.css" />
+  </head>
+  <body data-page="metals">
+    <main class="page">
+      <section class="card">
+        <div class="card-toolbar">
+          <nav class="page-nav" aria-label="Pages">
+            <a id="nav-currency" class="page-nav__link" href="/currency">Currency</a>
+            <a id="nav-metals" class="page-nav__link" href="/metals" aria-current="page">
+              Metals
+            </a>
+          </nav>
+          <div class="language-switcher">
+            <label id="language-label" class="language-switcher__label"> Language </label>
+            <button
+              id="language-flag-button"
+              type="button"
+              class="language-switcher__flag-btn"
+              aria-label="Open language selector"
+              aria-haspopup="true"
+              aria-expanded="false"
+            >
+              🇬🇧
+            </button>
+            <div id="language-menu" class="language-switcher__menu" hidden>
+              <button type="button" class="language-switcher__menu-item" data-lang="en">
+                🇬🇧 English
+              </button>
+              <button type="button" class="language-switcher__menu-item" data-lang="fr">
+                🇫🇷 Français
+              </button>
+              <button type="button" class="language-switcher__menu-item" data-lang="de">
+                🇩🇪 Deutsch
+              </button>
+              <button type="button" class="language-switcher__menu-item" data-lang="es">
+                🇪🇸 Español
+              </button>
+            </div>
+          </div>
+        </div>
+        <h1 id="page-title">Metals Converter</h1>
+        <p id="page-subtitle" class="subtitle">
+          Select an amount, metal and currency to get the latest price.
+        </p>
+        <form id="converter-form" novalidate></form>
+        <p id="submit-result" class="result" aria-live="polite"></p>
+        <ul id="conversion-list" class="conversion-list"></ul>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

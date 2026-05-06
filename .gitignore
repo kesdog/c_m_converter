@@ -1,0 +1,6 @@
+.env
+node_modules/
+dist/
+.tools/
+data/*.json
+data_test_cache/*.json
