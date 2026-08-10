@@ -24,7 +24,7 @@ The app uses two separate cache files:
 
 The caches are separated because the two datasets have different shapes and usage patterns:
 
-- Currency data is grouped by base currency with multiple target rates.
+- Currency data is grouped by base currency with the complete rate set returned by one provider call.
 - Metal data is grouped by metal symbol and target currency, then reused for ounce, gram, and reverse calculations.
 
 ## Why Cache Instead Of Calling APIs Every Time
@@ -34,12 +34,16 @@ The caches are separated because the two datasets have different shapes and usag
 - Makes the app more resilient when external APIs are slow or unavailable.
 - Keeps infrastructure simple and low cost.
 
+## Agent API
+
+The application exposes `/openapi.json` and `/llms.txt` so agents can discover the JSON API without driving the HTML interface. Agent conversion endpoints share the same cache and validation as user-facing conversion endpoints. All conversion routes use a per-IP token bucket with a 20-request capacity and one token replenished every three seconds.
+
 Once a metal ounce price is cached, gram prices and reverse conversions are calculated locally. That means the app reuses the same cached source price instead of making new requests for every variation.
 
 ## Cache Freshness Rules
 
-- Cached entries are valid for less than 24 hours from the stored timestamp.
-- If a cached entry is older than 24 hours, it is treated as stale and replaced.
+- Cached entries are valid for less than three hours from the stored timestamp.
+- If a cached entry is older than three hours, it is treated as stale and replaced.
 - This is more precise than a calendar-day cache because it avoids data going stale immediately after midnight.
 
 ## Storage And Size Limits
@@ -49,7 +53,7 @@ The caches are designed for a shared volume so multiple app instances can read t
 To keep the footprint small:
 
 - Cache files are pruned automatically.
-- Entries older than 24 hours are removed.
+- Entries older than three hours are removed.
 - Each cache file is capped at 25 MB, keeping the total cache footprint under 50 MB.
 
 ## Why No Database

@@ -4,9 +4,22 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "dev": "vite",
+    "build": "vite build"
   },
   "dependencies": {
-    "@everapi/freecurrencyapi-js": "^1.0.1"
+    "@chakra-ui/react": "^3.36.1",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@everapi/freecurrencyapi-js": "^1.0.1",
+    "country-flag-icons": "^1.6.20",
+    "framer-motion": "^13.1.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.5",
+    "vite": "^8.2.1"
   }
 }

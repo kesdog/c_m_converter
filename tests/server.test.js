@@ -5,7 +5,7 @@ const path = require("path");
 const { Readable, Writable } = require("node:stream");
 const { appHandler } = require("../server");
 
-function runHandler(handler, { method, url, body }) {
+function runHandler(handler, { method, url, body, headers = {}, remoteAddress = "127.0.0.1" }) {
   return new Promise((resolve, reject) => {
     const req = new Readable({
       read() {
@@ -17,6 +17,8 @@ function runHandler(handler, { method, url, body }) {
     });
     req.method = method;
     req.url = url;
+    req.headers = headers;
+    req.socket = { remoteAddress };
 
     const chunks = [];
     const res = new Writable({
@@ -59,11 +61,11 @@ test("serves index page and accepts form POST", async () => {
   const getResponse = await runHandler(handler, { method: "GET", url: "/" });
   assert.equal(getResponse.statusCode, 200);
   assert.match(getResponse.body, /<title>Currency Converter<\/title>/);
-  assert.match(getResponse.body, /id="converter-form"/);
+  assert.match(getResponse.body, /id="root"/);
 
   const currencyPageResponse = await runHandler(handler, { method: "GET", url: "/currency" });
   assert.equal(currencyPageResponse.statusCode, 200);
-  assert.match(currencyPageResponse.body, /href="\/metals"/);
+  assert.match(currencyPageResponse.body, /data-page="currency"/);
 
   const currenciesResponse = await runHandler(handler, {
     method: "GET",
@@ -102,6 +104,18 @@ test("serves index page and accepts form POST", async () => {
   const payload2 = JSON.parse(postResponse2.body);
   assert.equal(payload2.cached, true);
 
+  const expandedTargetsResponse = await runHandler(handler, {
+    method: "POST",
+    url: "/convert",
+    body: JSON.stringify({
+      amount: "100",
+      baseCurrency: "USD",
+      targetCurrencies: ["CAD"]
+    })
+  });
+  assert.equal(expandedTargetsResponse.statusCode, 200);
+  assert.equal(JSON.parse(expandedTargetsResponse.body).cached, true);
+
   const duplicateTargetResponse = await runHandler(handler, {
     method: "POST",
     url: "/convert",
@@ -137,14 +151,14 @@ test("serves index page and accepts form POST", async () => {
   delete process.env.CACHE_DIR;
 });
 
-test("ignores currency cache entries older than 24 hours", async () => {
+test("ignores currency cache entries older than three hours", async () => {
   process.env.CACHE_DIR = "data_test_cache";
   const cacheDir = path.join(process.cwd(), process.env.CACHE_DIR);
   const cachePath = path.join(cacheDir, "rates-cache.json");
   await fs.rm(cacheDir, { recursive: true, force: true });
   await fs.mkdir(cacheDir, { recursive: true });
 
-  const staleFetchedAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  const staleFetchedAt = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
   await fs.writeFile(
     cachePath,
     JSON.stringify(
@@ -195,7 +209,7 @@ test("serves metals page and caches metals results", async () => {
   const getResponse = await runHandler(handler, { method: "GET", url: "/metals" });
   assert.equal(getResponse.statusCode, 200);
   assert.match(getResponse.body, /<title>Metals Converter<\/title>/);
-  assert.match(getResponse.body, /href="\/currency"/);
+  assert.match(getResponse.body, /data-page="metals"/);
 
   const metalsResponse = await runHandler(handler, {
     method: "GET",
@@ -321,14 +335,14 @@ test("serves metals page and caches metals results", async () => {
   delete process.env.CACHE_DIR;
 });
 
-test("ignores metals cache entries older than 24 hours", async () => {
+test("ignores metals cache entries older than three hours", async () => {
   process.env.CACHE_DIR = "data_test_cache";
   const cacheDir = path.join(process.cwd(), process.env.CACHE_DIR);
   const cachePath = path.join(cacheDir, "metals-cache.json");
   await fs.rm(cacheDir, { recursive: true, force: true });
   await fs.mkdir(cacheDir, { recursive: true });
 
-  const staleUpdatedAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  const staleUpdatedAt = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
   await fs.writeFile(
     cachePath,
     JSON.stringify(
@@ -376,6 +390,100 @@ test("ignores metals cache entries older than 24 hours", async () => {
   const payload = JSON.parse(response.body);
   assert.equal(payload.cached, false);
   assert.notEqual(payload.conversion.unitPricePerOunce, 1);
+
+  delete process.env.CACHE_DIR;
+});
+
+test("serves agent discovery documents and shares conversion cache with the web routes", async () => {
+  process.env.CACHE_DIR = "data_test_cache";
+  const cacheDir = path.join(process.cwd(), process.env.CACHE_DIR);
+  await fs.rm(cacheDir, { recursive: true, force: true });
+
+  const handler = appHandler(process.cwd());
+  const openApiResponse = await runHandler(handler, { method: "GET", url: "/openapi.json" });
+  assert.equal(openApiResponse.statusCode, 200);
+  const openApi = JSON.parse(openApiResponse.body);
+  assert.ok(openApi.paths["/api/agent/v1/currency/convert"]);
+  assert.ok(openApi.paths["/api/agent/v1/metals/convert"]);
+
+  const llmsResponse = await runHandler(handler, { method: "GET", url: "/llms.txt" });
+  assert.equal(llmsResponse.statusCode, 200);
+  assert.match(llmsResponse.body, /\/api\/agent\/v1\/currency\/convert/);
+
+  const agentCurrenciesResponse = await runHandler(handler, {
+    method: "GET",
+    url: "/api/agent/v1/currencies"
+  });
+  assert.equal(agentCurrenciesResponse.statusCode, 200);
+  assert.ok(JSON.parse(agentCurrenciesResponse.body).currencies.length > 0);
+
+  const agentResponse = await runHandler(handler, {
+    method: "POST",
+    url: "/api/agent/v1/currency/convert",
+    body: JSON.stringify({ amount: 10, baseCurrency: "USD", targetCurrencies: ["EUR"] })
+  });
+  assert.equal(agentResponse.statusCode, 200);
+  const agentPayload = JSON.parse(agentResponse.body);
+  assert.equal(agentPayload.cached, false);
+
+  const webResponse = await runHandler(handler, {
+    method: "POST",
+    url: "/convert",
+    body: JSON.stringify({ amount: 10, baseCurrency: "USD", targetCurrencies: ["EUR"] })
+  });
+  assert.equal(webResponse.statusCode, 200);
+  const webPayload = JSON.parse(webResponse.body);
+  assert.equal(webPayload.cached, true);
+  assert.deepEqual(webPayload.conversions, agentPayload.conversions);
+
+  const agentMetalsResponse = await runHandler(handler, {
+    method: "GET",
+    url: "/api/agent/v1/metals"
+  });
+  assert.equal(agentMetalsResponse.statusCode, 200);
+  assert.deepEqual(JSON.parse(agentMetalsResponse.body).metals.map((metal) => metal.symbol), [
+    "XAU",
+    "XAG",
+    "HG",
+    "XPT"
+  ]);
+
+  delete process.env.CACHE_DIR;
+});
+
+test("limits conversion requests with per-IP token buckets", async () => {
+  process.env.CACHE_DIR = "data_test_cache";
+  const cacheDir = path.join(process.cwd(), process.env.CACHE_DIR);
+  await fs.rm(cacheDir, { recursive: true, force: true });
+
+  let currentTime = 0;
+  const handler = appHandler(process.cwd(), undefined, {
+    now: () => currentTime,
+    trustProxy: true
+  });
+  const request = {
+    method: "POST",
+    url: "/api/agent/v1/currency/convert",
+    headers: { "x-real-ip": "203.0.113.10" },
+    body: JSON.stringify({ amount: 1, baseCurrency: "USD", targetCurrencies: ["EUR"] })
+  };
+
+  for (let index = 0; index < 20; index += 1) {
+    assert.equal((await runHandler(handler, request)).statusCode, 200);
+  }
+
+  const limitedResponse = await runHandler(handler, request);
+  assert.equal(limitedResponse.statusCode, 429);
+  assert.equal(limitedResponse.headers["Retry-After"], "3");
+
+  const otherIpResponse = await runHandler(handler, {
+    ...request,
+    headers: { "x-real-ip": "203.0.113.11" }
+  });
+  assert.equal(otherIpResponse.statusCode, 200);
+
+  currentTime += 3 * 1000;
+  assert.equal((await runHandler(handler, request)).statusCode, 200);
 
   delete process.env.CACHE_DIR;
 });

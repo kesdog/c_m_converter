@@ -1,0 +1,24 @@
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0b1630;
+  --surface: #14213d;
+  --surface-raised: #1c2d4d;
+  --field: #0f1c35;
+  --ink: #f4f7ff;
+  --muted: #c4cee2;
+  --hint: #e0e7f8;
+  --placeholder: #f4f7ff;
+  --border: #7d91b8;
+  --accent: #79d6ff;
+  --accent-hover: #b2e7ff;
+  --accent-ink: #071427;
+  --nav-active: #2b6b9d;
+  --result: #fce5a2;
+  --status-bg: #1c3f61;
+  --status-ink: #e7f7ff;
+  --danger: #ffb4ab;
+  --danger-bg: #5b2227;
+  --focus: #a8e4ff;
+  --selection: #91ddff;
+  --shadow: rgb(3 10 28 / 42%);
+}

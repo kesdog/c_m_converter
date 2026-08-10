@@ -43,6 +43,7 @@ Use:
 - `APP_PORT`: internal app port inside the container
 - `HOST_PORT`: local host port exposed for your reverse proxy
 - `CACHE_DIR`: persistent cache directory inside the container
+- `TRUST_PROXY`: trust Nginx's `X-Real-IP` header for per-client rate limits; keep `true` when using the supplied Docker and Nginx configuration
 
 Notes:
 
@@ -92,6 +93,19 @@ server {
 ```
 
 An equivalent sample is included in `deploy/nginx/currency-converter.conf`.
+
+## Agent API
+
+Agents should use the JSON API rather than the HTML interface:
+
+- `GET /openapi.json`: machine-readable API specification
+- `GET /llms.txt`: agent integration instructions
+- `GET /api/agent/v1/currencies`: supported currency list
+- `GET /api/agent/v1/metals`: supported metal list
+- `POST /api/agent/v1/currency/convert`: currency conversion
+- `POST /api/agent/v1/metals/convert`: metals conversion
+
+Agent and web conversion routes share the same three-hour cache. Currency refreshes fetch the complete rate set for the requested base currency; metal refreshes remain per metal/currency pair. Conversion requests are limited per public IP with a token bucket: 20 immediate requests, then one request replenished every three seconds. A limited request receives `429 Too Many Requests` with a `Retry-After` header.
 
 ## DNS And Site Integration
 

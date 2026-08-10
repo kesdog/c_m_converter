@@ -1,0 +1,24 @@
+html[data-theme="light"] {
+  color-scheme: light;
+  --page: #edf3fb;
+  --surface: #ffffff;
+  --surface-raised: #f4f7fc;
+  --field: #ffffff;
+  --ink: #13233b;
+  --muted: #425675;
+  --hint: #304c73;
+  --placeholder: #425675;
+  --border: #7185a5;
+  --accent: #075e99;
+  --accent-hover: #004d80;
+  --accent-ink: #ffffff;
+  --nav-active: #d9edff;
+  --result: #6a4500;
+  --status-bg: #dcefff;
+  --status-ink: #123c61;
+  --danger: #8e1d27;
+  --danger-bg: #ffe9e8;
+  --focus: #005f9e;
+  --selection: #bfe6ff;
+  --shadow: rgb(24 47 83 / 18%);
+}

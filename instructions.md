@@ -2,7 +2,7 @@ Currency Converter Project Instructions
 
 Project goal:
 - Build a deployable currency converter with a Node.js backend and a lightweight frontend.
-- Optimize API usage because of rate limits by caching daily currency rates.
+- Optimize API usage by caching exchange and metal rates for three hours.
 - Keep the codebase modular so coding agents can extend it safely.
 
 Current stack:
@@ -13,9 +13,9 @@ Current stack:
 
 Core features implemented:
 - Convert one base currency into multiple target currencies.
-- Daily cache policy:
-  - If today’s rates exist in cache for requested targets, use cache.
-  - If some targets are missing for today, fetch only missing targets and merge.
+- Three-hour cache policy:
+  - If a fresh rate set exists for the selected base currency, use cache.
+  - If it is stale, fetch all available rates for that base currency in one request.
   - Reuse cached rates for recalculations with new amounts.
 - API source metadata in UI:
   - Fresh: shows source site + timestamp.
@@ -59,6 +59,7 @@ Environment variables:
   - If a full URL is provided, server extracts `apikey` automatically.
 - `APP_PORT` (default `3000`)
 - `CACHE_DIR` (optional; defaults to `data`)
+- `TRUST_PROXY` (set to `true` behind the supplied Nginx proxy so rate limits use `X-Real-IP`)
 
 Backend endpoints:
 - `GET /api/currencies`
@@ -66,6 +67,12 @@ Backend endpoints:
 - `POST /convert` (and alias `/submit`)
   - Input: `{ amount, baseCurrency, targetCurrencies }`
   - Output includes conversion list + cache/source metadata.
+- `GET /openapi.json`
+  - Machine-readable specification for the agent API.
+- `GET /llms.txt`
+  - Agent integration guidance.
+- `/api/agent/v1/*`
+  - Agent aliases for currencies, metals, and both conversion routes; they share the web routes' cache and validation.
 
 Validation rules (must keep):
 - Amount must be a positive number.
