@@ -289,6 +289,7 @@ function buildMetalConversion({ amount, metalSymbol, currency, priceData, unit, 
 }
 
 module.exports = {
+  CACHE_TTL_MS,
   SUPPORTED_METALS,
   SUPPORTED_METAL_UNITS,
   SUPPORTED_METAL_OPERATIONS,

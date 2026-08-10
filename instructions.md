@@ -6,8 +6,8 @@ Project goal:
 - Keep the codebase modular so coding agents can extend it safely.
 
 Current stack:
-- Backend: Node.js HTTP server (`server.js`)
-- Frontend: Vanilla HTML/CSS/ES modules (`index.html`, `app.js`)
+- Backend: Node.js HTTP server (`server.js`, `httpApp.js`)
+- Frontend: React, Chakra UI, and Vite (`src/`)
 - External API wrapper: `@everapi/freecurrencyapi-js`
 - Tests: Node test runner (`node --test`)
 
@@ -41,10 +41,13 @@ Important architecture decisions:
   - Server validation: `validation/serverValidation.js`
 
 Current file layout:
-- `index.html`: page shell, language button/menu, form mount points.
-- `app.js`: app bootstrap, i18n load, UI wiring, submit flow.
-- `styles/styles.css`: responsive styles and component styling.
-- `server.js`: static file serving, API endpoints, cache + provider logic.
+- `index.html`, `currency.html`, `metals.html`: Vite page entries and React mount points.
+- `src/App.jsx`: UI, i18n wiring, form state, and submit flow.
+- `src/themes/`: separate light and dark semantic colour tokens.
+- `src/styles.css`: shared responsive and component styling.
+- `server.js`: server bootstrap and production static-asset selection.
+- `httpApp.js`: static file serving, API routes, validation, and rate-limit integration.
+- `conversionService.js`: provider calls, cache lifecycle, and conversion calculations.
 - `currencies.json`: supported currency list.
 - `i18n/translations.json`: translated labels/messages.
 - `ui/targetBlock.js`: reusable target conversion block component.
@@ -90,10 +93,21 @@ Testing:
 Deployment notes:
 - App is ready for containerized deployment.
 - Recommended production pattern:
-  - Build image with Node LTS.
+  - Build the multi-stage image with `docker compose up --build -d`.
   - Inject API key and port via environment variables at runtime.
   - Mount `data/` as a persistent volume so cache survives restarts.
   - Place behind a reverse proxy (Nginx/Caddy) with HTTPS.
+  - Route a dedicated subdomain such as `currency.yoursite.com` to the container because the application uses root-relative routes.
+- Environment variables:
+  - `FREECURRENCY_API_KEY`: provider API key.
+  - `APP_PORT`: internal Node server port, default `3000`.
+  - `HOST_PORT`: host port used by Docker Compose, default `3000`.
+  - `CACHE_DIR`: runtime cache directory, default `data`.
+  - `TRUST_PROXY`: set to `true` behind the supplied Nginx pattern so rate limits use `X-Real-IP`.
+- Docker commands:
+  - Start or rebuild: `docker compose up --build -d`.
+  - Stop: `docker compose down`.
+- The example Nginx configuration is in `deploy/nginx/currency-converter.conf`.
 
 Agent guidance:
 - Prefer adding new providers behind the same conversion contract returned by `/convert`.

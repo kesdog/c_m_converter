@@ -9,6 +9,7 @@ const {
   SUPPORTED_METALS,
   SUPPORTED_METAL_UNITS,
   SUPPORTED_METAL_OPERATIONS,
+  CACHE_TTL_MS,
   readJson,
   getRatesWithCache,
   getMetalPriceWithCache,
@@ -68,6 +69,16 @@ function rejectRateLimitedRequest(res, rateLimit) {
   );
 }
 
+function getCacheMetadata(fetchedAt) {
+  const fetchedAtMs = new Date(fetchedAt).getTime();
+  const expiresAtMs = Number.isFinite(fetchedAtMs) ? fetchedAtMs + CACHE_TTL_MS : Date.now() + CACHE_TTL_MS;
+  return {
+    cacheExpiresAt: new Date(expiresAtMs).toISOString(),
+    cacheTtlSeconds: CACHE_TTL_MS / 1000,
+    cacheTtlRemainingSeconds: Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000))
+  };
+}
+
 async function handleCurrencyConversion(req, res, rootDir, currencyDataPromise) {
   const parsed = await readRequestJson(req, res);
   if (!parsed) {
@@ -101,6 +112,7 @@ async function handleCurrencyConversion(req, res, rootDir, currencyDataPromise) 
     sourceSite: rateResult.sourceSite,
     fetchedAt: rateResult.fetchedAt,
     cacheDate: rateResult.cacheDate,
+    ...getCacheMetadata(rateResult.fetchedAt),
     conversions: mapConversions(amount, targetCurrencies, rateResult.rates)
   });
 }
@@ -144,6 +156,7 @@ async function handleMetalConversion(req, res, rootDir) {
     sourceSite: rateResult.sourceSite,
     fetchedAt: rateResult.fetchedAt,
     cacheDate: rateResult.cacheDate,
+    ...getCacheMetadata(rateResult.fetchedAt),
     conversion: buildMetalConversion({
       amount,
       metalSymbol,

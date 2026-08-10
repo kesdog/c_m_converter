@@ -147,6 +147,13 @@ test("serves index page and accepts form POST", async () => {
   assert.ok(cachePayload.byBase.USD);
   assert.ok(cachePayload.byBase.USD.fetchedAt);
   assert.match(payload2.cacheDate, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(payload2.cacheTtlSeconds, 3 * 60 * 60);
+  assert.ok(payload2.cacheTtlRemainingSeconds > 0);
+  assert.ok(payload2.cacheTtlRemainingSeconds <= payload2.cacheTtlSeconds);
+  assert.equal(
+    new Date(payload2.cacheExpiresAt).getTime() - new Date(payload2.fetchedAt).getTime(),
+    payload2.cacheTtlSeconds * 1000
+  );
 
   delete process.env.CACHE_DIR;
 });
@@ -271,6 +278,8 @@ test("serves metals page and caches metals results", async () => {
   assert.equal(postResponse2.statusCode, 200);
   const payload2 = JSON.parse(postResponse2.body);
   assert.equal(payload2.cached, true);
+  assert.equal(payload2.cacheTtlSeconds, 3 * 60 * 60);
+  assert.ok(payload2.cacheTtlRemainingSeconds > 0);
   assert.equal(
     payload2.conversion.unitPricePerGram,
     Number((payload2.conversion.unitPricePerOunce / 31.1034768).toFixed(6))
