@@ -4,7 +4,7 @@ const OPENAPI_DOCUMENT = {
     title: "Currency and Metals Converter Agent API",
     version: "1.0.0",
     description:
-      "Use these JSON endpoints instead of the HTML interface. Conversion data is shared with the web UI cache and refreshed only when older than three hours. Conversion responses include the fetch time, expiry time, configured TTL, and remaining TTL."
+      "Use these JSON endpoints instead of the HTML interface. Conversion data is shared with the web UI cache and refreshed when older than one hour. Provider failures never generate synthetic values: a valid stale cache may be returned with degraded=true, otherwise the endpoint returns 503."
   },
   paths: {
     "/api/agent/v1/currencies": {
@@ -32,7 +32,12 @@ const OPENAPI_DOCUMENT = {
             }
           }
         },
-        responses: { 200: { description: "Conversion result" }, 400: { description: "Invalid request" }, 429: { description: "Rate limited" } }
+        responses: {
+          200: { description: "Live, fresh-cache, or explicitly degraded stale-cache conversion result" },
+          400: { description: "Invalid request" },
+          429: { description: "Rate limited" },
+          503: { description: "Provider unavailable and no usable cache exists" }
+        }
       }
     },
     "/api/agent/v1/metals/convert": {
@@ -56,7 +61,12 @@ const OPENAPI_DOCUMENT = {
             }
           }
         },
-        responses: { 200: { description: "Conversion result" }, 400: { description: "Invalid request" }, 429: { description: "Rate limited" } }
+        responses: {
+          200: { description: "Live, fresh-cache, or explicitly degraded stale-cache conversion result" },
+          400: { description: "Invalid request" },
+          429: { description: "Rate limited" },
+          503: { description: "Provider unavailable and no usable cache exists" }
+        }
       }
     }
   }
@@ -74,7 +84,7 @@ Use the JSON agent API instead of the HTML interface.
 
 Currency requests require amount, baseCurrency, and targetCurrencies (one to four unique codes). Metal requests require amount, metalSymbol, and currency; unit defaults to oz and operation defaults to metal-to-currency.
 
-Agent and web routes share the same three-hour cache. Currency rates refresh as a complete base-currency set; metal prices refresh per metal/currency pair. Responses include cached, source, sourceSite, fetchedAt, cacheDate, cacheExpiresAt, cacheTtlSeconds, and cacheTtlRemainingSeconds. fetchedAt is the exact UTC time when the provider data was pulled; cacheExpiresAt is the exact UTC expiry; cacheTtlSeconds is the configured three-hour lifetime; and cacheTtlRemainingSeconds is calculated at response time.
+Agent and web routes share the same one-hour cache. Currency rates refresh as a complete base-currency set; metal prices refresh per metal/currency pair. Responses include cached, stale, degraded, dataStatus, warning, source, sourceSite, fetchedAt, cacheDate, cacheExpiresAt, cacheTtlSeconds, cacheTtlRemainingSeconds, cacheAgeSeconds, and staleBySeconds. dataStatus is live, fresh-cache, or stale-cache. A stale-cache response is usable last-known data, not current market data, and must be presented as an estimate with its warning. The warning includes severity=orange for stale data through 24 hours and severity=red after 24 hours. Provider failures never create mock values. If no valid cache exists, conversion endpoints return HTTP 503 with error.code=UPSTREAM_UNAVAILABLE_NO_CACHE and no conversion values.
 
 Conversion routes use an IP token bucket: 20 requests may burst immediately, then one token refills every three seconds. A 429 response includes Retry-After in seconds.
 `;

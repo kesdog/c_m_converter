@@ -42,8 +42,11 @@ Once a metal ounce price is cached, gram prices and reverse conversions are calc
 
 ## Cache Freshness Rules
 
-- Cached entries are valid for less than three hours from the stored timestamp.
-- If a cached entry is older than three hours, it is treated as stale and replaced.
+- Cached entries are valid for less than one hour from the stored timestamp.
+- If a cached entry is older than one hour, it is treated as stale and refreshed when possible.
+- If the provider is unavailable, the most recent valid stale entry is returned with a warning; no mock values are generated.
+- Stale fallback warnings are orange through 24 hours and red after 24 hours.
+- If no valid cache exists during a provider outage, the conversion request fails with HTTP 503.
 - This is more precise than a calendar-day cache because it avoids data going stale immediately after midnight.
 
 ## Storage And Size Limits
@@ -53,7 +56,7 @@ The caches are designed for a shared volume so multiple app instances can read t
 To keep the footprint small:
 
 - Cache files are pruned automatically.
-- Entries older than three hours are removed.
+- Invalid entries are removed; stale entries are retained for outage fallback.
 - Each cache file is capped at 25 MB, keeping the total cache footprint under 50 MB.
 
 ## Why No Database

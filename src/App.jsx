@@ -44,15 +44,31 @@ const formatDateTime = (value, fallback) =>
     ? fallback
     : new Date(value).toLocaleString();
 
-function StatusMessage({ message, error = false }) {
+function StatusMessage({
+  message,
+  error = false,
+  warning = false,
+  warningSeverity = "orange",
+}) {
   if (!message) return null;
+  const tone = error || (warning && warningSeverity === "red")
+    ? "error"
+    : warning
+      ? "warning"
+      : "status";
   return (
     <Box
       aria-live="polite"
       borderLeftWidth="2px"
-      borderColor={error ? "var(--danger)" : "var(--accent)"}
-      bg={error ? "var(--danger-bg)" : "var(--status-bg)"}
-      color={error ? "var(--danger)" : "var(--status-ink)"}
+      borderColor={
+        error || (warning && warningSeverity === "red")
+          ? "var(--danger)"
+          : warning
+            ? "var(--warning)"
+            : "var(--accent)"
+      }
+      bg={`var(--${tone === "error" ? "danger-bg" : tone === "warning" ? "warning-bg" : "status-bg"})`}
+      color={`var(--${tone === "error" ? "danger" : tone === "warning" ? "warning-ink" : "status-ink"})`}
       px="3"
       py="2"
       borderRadius="md"
@@ -61,6 +77,31 @@ function StatusMessage({ message, error = false }) {
       {message}
     </Box>
   );
+}
+
+function formatDataMessage(data, t) {
+  const freshness = data.cached
+    ? t("cachedResultMessage", {
+        dateTime: formatDateTime(data.fetchedAt, t("unknownDate")),
+        cacheDate: data.cacheDate,
+      })
+    : t("freshResultMessage", {
+        site: data.sourceSite || t("defaultApiSite"),
+        dateTime: formatDateTime(data.fetchedAt, t("unknownDate")),
+      });
+  const warningKey =
+    data.warning?.code === "LIVE_DATA_UNAVAILABLE_USING_STALE_CACHE"
+      ? "staleDataWarning"
+      : data.warning?.code === "CACHE_WRITE_FAILED"
+        ? "cacheWriteWarning"
+        : "";
+  const warningText =
+    data.warning?.severity === "red"
+      ? t("veryStaleDataWarning")
+      : warningKey
+        ? t(warningKey)
+        : data.warning?.message;
+  return warningText ? `${warningText} ${freshness}` : freshness;
 }
 
 function CurrencyCombobox({
@@ -237,6 +278,8 @@ function CurrencyForm({ t, currencies, maxComparisons }) {
   const [rawTargets, setRawTargets] = useState([""]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
+  const [warning, setWarning] = useState(false);
+  const [warningSeverity, setWarningSeverity] = useState("orange");
   const [conversions, setConversions] = useState([]);
   const [loading, setLoading] = useState(false);
   const setTarget = (index, value) => {
@@ -293,6 +336,8 @@ function CurrencyForm({ t, currencies, maxComparisons }) {
       return;
     }
     setLoading(true);
+    setWarning(false);
+    setWarningSeverity("orange");
     try {
       const response = await fetch("/convert", {
         method: "POST",
@@ -303,25 +348,19 @@ function CurrencyForm({ t, currencies, maxComparisons }) {
           targetCurrencies: validation.uniqueTargets,
         }),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       if (!response.ok)
         throw new Error(data.message || t("messageSubmitError"));
-      setMessage(
-        data.cached
-          ? t("cachedResultMessage", {
-              dateTime: formatDateTime(data.fetchedAt, t("unknownDate")),
-              cacheDate: data.cacheDate,
-            })
-          : t("freshResultMessage", {
-              site: data.sourceSite || t("defaultApiSite"),
-              dateTime: formatDateTime(data.fetchedAt, t("unknownDate")),
-            }),
-      );
+      setMessage(formatDataMessage(data, t));
       setError(false);
+      setWarning(Boolean(data.degraded));
+      setWarningSeverity(data.warning?.severity || "orange");
       setConversions(data.conversions || []);
     } catch (requestError) {
       setMessage(requestError.message || t("messageSubmitError"));
       setError(true);
+      setWarning(false);
+      setWarningSeverity("orange");
     } finally {
       setLoading(false);
     }
@@ -466,7 +505,12 @@ function CurrencyForm({ t, currencies, maxComparisons }) {
       >
         {t("convertButton")}
       </Button>
-      <StatusMessage message={message} error={error} />
+      <StatusMessage
+        message={message}
+        error={error}
+        warning={warning}
+        warningSeverity={warningSeverity}
+      />
       <Results conversions={conversions} />
     </Stack>
   );
@@ -500,6 +544,8 @@ function MetalsForm({ t, currencies, metals }) {
   const [operation, setOperation] = useState("metal-to-currency");
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
+  const [warning, setWarning] = useState(false);
+  const [warningSeverity, setWarningSeverity] = useState("orange");
   const [conversion, setConversion] = useState(null);
   const [loading, setLoading] = useState(false);
   const reverse = operation === "currency-to-metal";
@@ -507,6 +553,8 @@ function MetalsForm({ t, currencies, metals }) {
     event.preventDefault();
     setConversion(null);
     setLoading(true);
+    setWarning(false);
+    setWarningSeverity("orange");
     try {
       const response = await fetch("/convert-metals", {
         method: "POST",
@@ -519,25 +567,19 @@ function MetalsForm({ t, currencies, metals }) {
           operation,
         }),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       if (!response.ok)
         throw new Error(data.message || t("messageSubmitError"));
-      setMessage(
-        data.cached
-          ? t("cachedResultMessage", {
-              dateTime: formatDateTime(data.fetchedAt, t("unknownDate")),
-              cacheDate: data.cacheDate,
-            })
-          : t("freshResultMessage", {
-              site: data.sourceSite || t("defaultApiSite"),
-              dateTime: formatDateTime(data.fetchedAt, t("unknownDate")),
-            }),
-      );
+      setMessage(formatDataMessage(data, t));
       setError(false);
+      setWarning(Boolean(data.degraded));
+      setWarningSeverity(data.warning?.severity || "orange");
       setConversion(data.conversion);
     } catch (requestError) {
       setMessage(requestError.message || t("messageSubmitError"));
       setError(true);
+      setWarning(false);
+      setWarningSeverity("orange");
     } finally {
       setLoading(false);
     }
@@ -648,7 +690,12 @@ function MetalsForm({ t, currencies, metals }) {
       >
         {reverse ? t("metalReverseConvertButton") : t("metalConvertButton")}
       </Button>
-      <StatusMessage message={message} error={error} />
+      <StatusMessage
+        message={message}
+        error={error}
+        warning={warning}
+        warningSeverity={warningSeverity}
+      />
       <Results conversion={conversion} context={{ operation, unit, amount }} />
     </Stack>
   );
@@ -686,7 +733,7 @@ export default function App({ pageType }) {
           });
         },
       )
-      .catch((error) => setLoadError(error.message));
+      .catch(() => setLoadError("Unable to load startup data."));
   }, []);
   const t = (key, variables) =>
     translate(

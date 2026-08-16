@@ -33,8 +33,8 @@ The frontend is built with Vite and served as static assets by the same Node pro
 2. A user selects an amount and a base currency, then adds one or more target currencies. The UI excludes the base and already-selected targets before a user can choose them.
 3. On submit, the client sends a JSON request to `/convert` or `/convert-metals`.
 4. The server checks the per-IP rate-limit bucket, validates the request again, and rejects invalid or abusive requests before calling a provider.
-5. The conversion service checks its three-hour cache. A fresh entry is returned immediately; otherwise the relevant provider data is fetched and written atomically to the persistent cache.
-6. Currency or metal calculations are performed locally and returned with source, cache, and timestamp metadata for the UI to display.
+5. The conversion service checks its one-hour cache. A fresh entry is returned immediately; otherwise the relevant provider data is fetched and written atomically to the persistent cache.
+6. Currency or metal calculations are performed locally and returned with source, cache, freshness, and warning metadata for the UI to display. Provider failures never create synthetic rates or prices.
 
 ## Agent Request Flow
 
@@ -43,7 +43,7 @@ An agent follows the same protected conversion path as the web UI, but uses stab
 1. Read `GET /openapi.json` or `GET /llms.txt` to discover the contract.
 2. Optionally call `GET /api/agent/v1/currencies` or `GET /api/agent/v1/metals` to validate a desired code or symbol.
 3. Submit a conversion request to the versioned agent endpoint.
-4. Use the returned values and provenance metadata in the agent response.
+4. Use the returned values and provenance metadata in the agent response. If `degraded` is true or `dataStatus` is `stale-cache`, treat the values as last-known estimates rather than current market data.
 
 ### Example Agent Call
 
@@ -63,13 +63,19 @@ Example response shape:
 {
   "message": "Converted 100 USD into 2 currencies.",
   "cached": true,
-  "source": "cache",
+  "stale": false,
+  "degraded": false,
+  "dataStatus": "fresh-cache",
+  "warning": null,
+  "source": "freecurrencyapi",
   "sourceSite": "freecurrencyapi.com",
   "fetchedAt": "2026-08-10T15:00:00.000Z",
   "cacheDate": "2026-08-10",
-  "cacheExpiresAt": "2026-08-10T18:00:00.000Z",
-  "cacheTtlSeconds": 10800,
-  "cacheTtlRemainingSeconds": 7242,
+  "cacheExpiresAt": "2026-08-10T16:00:00.000Z",
+  "cacheTtlSeconds": 3600,
+  "cacheTtlRemainingSeconds": 2442,
+  "cacheAgeSeconds": 1158,
+  "staleBySeconds": 0,
   "conversions": [
     { "code": "EUR", "rate": 0.92, "convertedAmount": 92 },
     { "code": "JPY", "rate": 145.1, "convertedAmount": 14510 }
@@ -77,7 +83,7 @@ Example response shape:
 }
 ```
 
-The values above are illustrative. Production responses use the current provider or shared cache data. `fetchedAt` records the exact UTC provider-fetch time, `cacheExpiresAt` gives the exact UTC expiry, `cacheTtlSeconds` is the configured three-hour lifetime, and `cacheTtlRemainingSeconds` reports the usable lifetime remaining when the response was created.
+The values above are illustrative. Production responses use current provider data or shared cache data. `fetchedAt` records the exact UTC provider-fetch time, `cacheExpiresAt` gives the exact UTC expiry, `cacheTtlSeconds` is the configured one-hour lifetime, and the age fields are calculated when the response is created. If the provider fails after expiry and a valid stale cache exists, the response remains `200` but sets `stale: true`, `degraded: true`, `dataStatus: "stale-cache"`, and includes a warning with orange severity through 24 hours and red severity after 24 hours. If no usable cache exists, the response is `503` and contains no fabricated conversion values.
 
 ## Cache Strategy
 
@@ -85,8 +91,9 @@ The application keeps currency and metals data in separate JSON caches on the mo
 
 - Currency rates are grouped by base currency. One provider refresh supplies the complete available rate set, so later target or amount changes reuse that same entry.
 - Metal prices are grouped by metal symbol and fiat currency. Ounce, gram, and reverse calculations reuse the same cached source price and are calculated locally.
-- Entries are fresh for less than three hours. Stale entries are refreshed on demand.
-- Cache writes are atomic, stale entries are pruned, and each cache file is capped at 25 MB.
+- Entries are fresh for less than one hour. Stale entries are retained as last-known-good fallback data and refreshed on demand.
+- A provider failure returns the newest valid stale entry with an explicit warning; it never writes mock data.
+- Cache writes are atomic, invalid or oversized entries are pruned, and each cache file is capped at 25 MB.
 
 This approach reduces provider cost and latency while keeping deployment and failure modes straightforward for a small, stateless service.
 
@@ -167,7 +174,7 @@ Application HTTP Node
   |       |       |
   |       |       +-- Decouverte agent : OpenAPI et llms.txt
   |       +---------- Validation et limitation des conversions
-  +------------------ Cache JSON de trois heures et fournisseurs externes
+        +------------------ Cache JSON d'une heure et fournisseurs externes
 ```
 
 Le frontend est construit avec Vite puis servi sous forme d'actifs statiques par le meme processus Node qui fournit l'API. L'image Docker utilise une etape de build pour le frontend, suivie d'une image Node de production plus compacte.
@@ -178,7 +185,7 @@ Le frontend est construit avec Vite puis servi sous forme d'actifs statiques par
 2. L'utilisateur choisit un montant et une devise de base, puis ajoute une ou plusieurs devises cibles. L'interface exclut la devise de base et les devises deja selectionnees avant tout choix.
 3. A la soumission, le client envoie une requete JSON vers `/convert` ou `/convert-metals`.
 4. Le serveur verifie le seau de limitation de l'adresse IP, valide a nouveau la requete et rejette les requetes invalides ou abusives avant tout appel fournisseur.
-5. Le service de conversion consulte son cache de trois heures. Une entree recente est renvoyee immediatement ; sinon, les donnees fournisseur sont recuperees et ecrites de maniere atomique dans le cache persistant.
+5. Le service de conversion consulte son cache d'une heure. Une entree recente est renvoyee immediatement ; sinon, les donnees fournisseur sont recuperees et ecrites de maniere atomique dans le cache persistant.
 6. Les calculs de devises ou de metaux sont realises localement et renvoyes avec les metadonnees de source, de cache et d'horodatage affichees par l'interface.
 
 ## Parcours Agent
@@ -213,8 +220,8 @@ Exemple de structure de reponse :
   "fetchedAt": "2026-08-10T15:00:00.000Z",
   "cacheDate": "2026-08-10",
   "cacheExpiresAt": "2026-08-10T18:00:00.000Z",
-  "cacheTtlSeconds": 10800,
-  "cacheTtlRemainingSeconds": 7242,
+  "cacheTtlSeconds": 3600,
+  "cacheTtlRemainingSeconds": 2442,
   "conversions": [
     { "code": "EUR", "rate": 0.92, "convertedAmount": 92 },
     { "code": "JPY", "rate": 145.1, "convertedAmount": 14510 }
@@ -222,7 +229,7 @@ Exemple de structure de reponse :
 }
 ```
 
-Les valeurs ci-dessus sont indicatives. Les reponses de production utilisent les donnees actuelles du fournisseur ou du cache partage. `fetchedAt` enregistre l'heure UTC exacte de recuperation chez le fournisseur, `cacheExpiresAt` donne l'heure UTC exacte d'expiration, `cacheTtlSeconds` est la duree de vie configuree de trois heures et `cacheTtlRemainingSeconds` indique la duree de validite restante lors de la creation de la reponse.
+Les valeurs ci-dessus sont indicatives. Les reponses de production utilisent les donnees actuelles du fournisseur ou du cache partage. `fetchedAt` enregistre l'heure UTC exacte de recuperation chez le fournisseur, `cacheExpiresAt` donne l'heure UTC exacte d'expiration, `cacheTtlSeconds` est la duree de vie configuree d'une heure et `cacheTtlRemainingSeconds` indique la duree de validite restante lors de la creation de la reponse.
 
 ## Strategie De Cache
 
@@ -230,7 +237,7 @@ L'application conserve les donnees de devises et de metaux dans des caches JSON 
 
 - Les taux de change sont regroupes par devise de base. Un rafraichissement fournisseur fournit l'ensemble des taux disponibles ; les changements ulterieurs de cible ou de montant reutilisent donc cette entree.
 - Les prix des metaux sont regroupes par symbole de metal et devise fiat. Les calculs en once, en gramme et inverses reutilisent le meme prix source en cache et sont effectues localement.
-- Les entrees restent recentes pendant moins de trois heures. Les entrees obsoletes sont rafraichies a la demande.
+- Les entrees restent recentes pendant moins d'une heure. Les entrees obsoletes sont rafraichies a la demande.
 - Les ecritures sont atomiques, les entrees obsoletes sont supprimees et chaque fichier de cache est limite a 25 Mo.
 
 Cette approche reduit les couts et la latence des fournisseurs tout en gardant le deploiement et les modes de panne simples pour un petit service sans etat.

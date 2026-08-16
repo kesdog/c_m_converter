@@ -18,6 +18,9 @@ html[data-theme="light"] {
   --status-ink: #123c61;
   --danger: #8e1d27;
   --danger-bg: #ffe9e8;
+  --warning: #7a5300;
+  --warning-bg: #fff3c7;
+  --warning-ink: #4f3700;
   --focus: #005f9e;
   --selection: #bfe6ff;
   --shadow: rgb(24 47 83 / 18%);

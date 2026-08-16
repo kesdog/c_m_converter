@@ -2,7 +2,7 @@ Currency Converter Project Instructions
 
 Project goal:
 - Build a deployable currency converter with a Node.js backend and a lightweight frontend.
-- Optimize API usage by caching exchange and metal rates for three hours.
+- Optimize API usage by caching exchange and metal rates for one hour.
 - Keep the codebase modular so coding agents can extend it safely.
 
 Current stack:
@@ -15,11 +15,15 @@ Core features implemented:
 - Convert one base currency into multiple target currencies.
 - Three-hour cache policy:
   - If a fresh rate set exists for the selected base currency, use cache.
-  - If it is stale, fetch all available rates for that base currency in one request.
+  - If it is older than one hour, fetch all available rates for that base currency in one request.
+  - If refresh fails, use the most recent valid stale entry with an explicit degraded warning.
+  - Stale fallback warnings are orange through 24 hours and red after 24 hours.
+  - If refresh fails and no valid cache exists, return HTTP 503 without conversion values.
   - Reuse cached rates for recalculations with new amounts.
 - API source metadata in UI:
   - Fresh: shows source site + timestamp.
   - Cached: shows cached timestamp + cache date.
+  - Degraded stale cache: shows a prominent warning and cached timestamp.
 - Target currency block system:
   - Add blocks with `+` button.
   - Remove added blocks with `X`.
@@ -112,5 +116,6 @@ Deployment notes:
 Agent guidance:
 - Prefer adding new providers behind the same conversion contract returned by `/convert`.
 - If adding provider failover, preserve cache semantics and include source metadata.
+- Never use synthetic or mock financial data. Agents must inspect `degraded`, `stale`, `dataStatus`, and `warning` before using a result as current.
 - Keep UI modules small; place reusable UI blocks/components in `ui/`.
 - Keep user-facing text in `i18n/translations.json`; do not hardcode labels.

@@ -50,13 +50,28 @@ function runHandler(handler, { method, url, body, headers = {}, remoteAddress = 
   });
 }
 
+function providerOptions(overrides = {}) {
+  return {
+    fetchRates: async () => ({ EUR: 0.92, JPY: 145.1, CAD: 1.36, GBP: 0.79 }),
+    fetchMetalPrice: async ({ metalSymbol, currency }) => ({
+      currency,
+      currencySymbol: currency,
+      exchangeRate: 1,
+      name: metalSymbol === "XAU" ? "Gold" : metalSymbol,
+      price: 4085.5,
+      symbol: metalSymbol
+    }),
+    ...overrides
+  };
+}
+
 test("serves index page and accepts form POST", async () => {
   process.env.CACHE_DIR = "data_test_cache";
   const cacheDir = path.join(process.cwd(), process.env.CACHE_DIR);
   const cachePath = path.join(cacheDir, "rates-cache.json");
   await fs.rm(cacheDir, { recursive: true, force: true });
 
-  const handler = appHandler(process.cwd());
+  const handler = appHandler(process.cwd(), undefined, providerOptions());
 
   const getResponse = await runHandler(handler, { method: "GET", url: "/" });
   assert.equal(getResponse.statusCode, 200);
@@ -147,7 +162,7 @@ test("serves index page and accepts form POST", async () => {
   assert.ok(cachePayload.byBase.USD);
   assert.ok(cachePayload.byBase.USD.fetchedAt);
   assert.match(payload2.cacheDate, /^\d{4}-\d{2}-\d{2}$/);
-  assert.equal(payload2.cacheTtlSeconds, 3 * 60 * 60);
+  assert.equal(payload2.cacheTtlSeconds, 60 * 60);
   assert.ok(payload2.cacheTtlRemainingSeconds > 0);
   assert.ok(payload2.cacheTtlRemainingSeconds <= payload2.cacheTtlSeconds);
   assert.equal(
@@ -158,7 +173,7 @@ test("serves index page and accepts form POST", async () => {
   delete process.env.CACHE_DIR;
 });
 
-test("ignores currency cache entries older than three hours", async () => {
+test("uses stale currency cache entries when the provider fails", async () => {
   process.env.CACHE_DIR = "data_test_cache";
   const cacheDir = path.join(process.cwd(), process.env.CACHE_DIR);
   const cachePath = path.join(cacheDir, "rates-cache.json");
@@ -186,10 +201,14 @@ test("ignores currency cache entries older than three hours", async () => {
     "utf8"
   );
 
-  const handler = appHandler(process.cwd());
+  const handler = appHandler(
+    process.cwd(),
+    undefined,
+    providerOptions({ fetchRates: async () => { throw new Error("provider unavailable"); } })
+  );
   const response = await runHandler(handler, {
     method: "POST",
-    url: "/convert",
+    url: "/api/agent/v1/currency/convert",
     body: JSON.stringify({
       amount: "1",
       baseCurrency: "USD",
@@ -199,8 +218,83 @@ test("ignores currency cache entries older than three hours", async () => {
 
   assert.equal(response.statusCode, 200);
   const payload = JSON.parse(response.body);
-  assert.equal(payload.cached, false);
-  assert.notEqual(payload.conversions[0].rate, 999);
+  assert.equal(payload.cached, true);
+  assert.equal(payload.stale, true);
+  assert.equal(payload.degraded, true);
+  assert.equal(payload.dataStatus, "stale-cache");
+  assert.equal(payload.warning.code, "LIVE_DATA_UNAVAILABLE_USING_STALE_CACHE");
+  assert.equal(payload.warning.severity, "orange");
+  assert.equal(payload.conversions[0].rate, 999);
+
+  delete process.env.CACHE_DIR;
+});
+
+test("returns 503 without fabricated currency data when provider and cache are unavailable", async () => {
+  process.env.CACHE_DIR = "data_test_cache";
+  const cacheDir = path.join(process.cwd(), process.env.CACHE_DIR);
+  await fs.rm(cacheDir, { recursive: true, force: true });
+
+  const handler = appHandler(
+    process.cwd(),
+    undefined,
+    providerOptions({ fetchRates: async () => { throw new Error("provider unavailable"); } })
+  );
+  const response = await runHandler(handler, {
+    method: "POST",
+    url: "/api/agent/v1/currency/convert",
+    body: JSON.stringify({ amount: 1, baseCurrency: "USD", targetCurrencies: ["EUR"] })
+  });
+
+  assert.equal(response.statusCode, 503);
+  const payload = JSON.parse(response.body);
+  assert.equal(payload.error.code, "UPSTREAM_UNAVAILABLE_NO_CACHE");
+  assert.equal(payload.dataAvailable, false);
+  assert.equal(Object.hasOwn(payload, "conversions"), false);
+  assert.equal(response.headers["Retry-After"], "60");
+
+  delete process.env.CACHE_DIR;
+});
+
+test("marks stale agent data red after 24 hours", async () => {
+  process.env.CACHE_DIR = "data_test_cache";
+  const cacheDir = path.join(process.cwd(), process.env.CACHE_DIR);
+  const cachePath = path.join(cacheDir, "rates-cache.json");
+  await fs.rm(cacheDir, { recursive: true, force: true });
+  await fs.mkdir(cacheDir, { recursive: true });
+  const staleFetchedAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  await fs.writeFile(
+    cachePath,
+    JSON.stringify({
+      byBase: {
+        USD: {
+          baseCurrency: "USD",
+          rates: { EUR: 999 },
+          source: "cache",
+          sourceSite: "stale-test",
+          fetchedAt: staleFetchedAt
+        }
+      }
+    }),
+    "utf8"
+  );
+
+  const handler = appHandler(
+    process.cwd(),
+    undefined,
+    providerOptions({ fetchRates: async () => { throw new Error("provider unavailable"); } })
+  );
+  const response = await runHandler(handler, {
+    method: "POST",
+    url: "/api/agent/v1/currency/convert",
+    body: JSON.stringify({ amount: 1, baseCurrency: "USD", targetCurrencies: ["EUR"] })
+  });
+
+  assert.equal(response.statusCode, 200);
+  const payload = JSON.parse(response.body);
+  assert.equal(payload.degraded, true);
+  assert.equal(payload.warning.severity, "red");
+  assert.ok(payload.warning.ageSeconds > 24 * 60 * 60);
+  assert.equal(payload.staleBySeconds > 0, true);
 
   delete process.env.CACHE_DIR;
 });
@@ -211,7 +305,7 @@ test("serves metals page and caches metals results", async () => {
   const cachePath = path.join(cacheDir, "metals-cache.json");
   await fs.rm(cacheDir, { recursive: true, force: true });
 
-  const handler = appHandler(process.cwd());
+  const handler = appHandler(process.cwd(), undefined, providerOptions());
 
   const getResponse = await runHandler(handler, { method: "GET", url: "/metals" });
   assert.equal(getResponse.statusCode, 200);
@@ -278,7 +372,7 @@ test("serves metals page and caches metals results", async () => {
   assert.equal(postResponse2.statusCode, 200);
   const payload2 = JSON.parse(postResponse2.body);
   assert.equal(payload2.cached, true);
-  assert.equal(payload2.cacheTtlSeconds, 3 * 60 * 60);
+  assert.equal(payload2.cacheTtlSeconds, 60 * 60);
   assert.ok(payload2.cacheTtlRemainingSeconds > 0);
   assert.equal(
     payload2.conversion.unitPricePerGram,
@@ -344,7 +438,7 @@ test("serves metals page and caches metals results", async () => {
   delete process.env.CACHE_DIR;
 });
 
-test("ignores metals cache entries older than three hours", async () => {
+test("uses stale metals cache entries when the provider fails", async () => {
   process.env.CACHE_DIR = "data_test_cache";
   const cacheDir = path.join(process.cwd(), process.env.CACHE_DIR);
   const cachePath = path.join(cacheDir, "metals-cache.json");
@@ -382,7 +476,11 @@ test("ignores metals cache entries older than three hours", async () => {
     "utf8"
   );
 
-  const handler = appHandler(process.cwd());
+  const handler = appHandler(
+    process.cwd(),
+    undefined,
+    providerOptions({ fetchMetalPrice: async () => { throw new Error("provider unavailable"); } })
+  );
   const response = await runHandler(handler, {
     method: "POST",
     url: "/convert-metals",
@@ -397,8 +495,12 @@ test("ignores metals cache entries older than three hours", async () => {
 
   assert.equal(response.statusCode, 200);
   const payload = JSON.parse(response.body);
-  assert.equal(payload.cached, false);
-  assert.notEqual(payload.conversion.unitPricePerOunce, 1);
+  assert.equal(payload.cached, true);
+  assert.equal(payload.stale, true);
+  assert.equal(payload.degraded, true);
+  assert.equal(payload.dataStatus, "stale-cache");
+  assert.equal(payload.warning.code, "LIVE_DATA_UNAVAILABLE_USING_STALE_CACHE");
+  assert.equal(payload.conversion.unitPricePerOunce, 1);
 
   delete process.env.CACHE_DIR;
 });
@@ -408,7 +510,7 @@ test("serves agent discovery documents and shares conversion cache with the web 
   const cacheDir = path.join(process.cwd(), process.env.CACHE_DIR);
   await fs.rm(cacheDir, { recursive: true, force: true });
 
-  const handler = appHandler(process.cwd());
+  const handler = appHandler(process.cwd(), undefined, providerOptions());
   const openApiResponse = await runHandler(handler, { method: "GET", url: "/openapi.json" });
   assert.equal(openApiResponse.statusCode, 200);
   const openApi = JSON.parse(openApiResponse.body);
@@ -467,6 +569,7 @@ test("limits conversion requests with per-IP token buckets", async () => {
 
   let currentTime = 0;
   const handler = appHandler(process.cwd(), undefined, {
+    ...providerOptions(),
     now: () => currentTime,
     trustProxy: true
   });

@@ -72,14 +72,36 @@ function rejectRateLimitedRequest(res, rateLimit) {
 function getCacheMetadata(fetchedAt) {
   const fetchedAtMs = new Date(fetchedAt).getTime();
   const expiresAtMs = Number.isFinite(fetchedAtMs) ? fetchedAtMs + CACHE_TTL_MS : Date.now() + CACHE_TTL_MS;
+  const now = Date.now();
   return {
     cacheExpiresAt: new Date(expiresAtMs).toISOString(),
     cacheTtlSeconds: CACHE_TTL_MS / 1000,
-    cacheTtlRemainingSeconds: Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000))
+    cacheTtlRemainingSeconds: Math.max(0, Math.floor((expiresAtMs - now) / 1000)),
+    cacheAgeSeconds: Number.isFinite(fetchedAtMs) ? Math.max(0, Math.floor((now - fetchedAtMs) / 1000)) : null,
+    staleBySeconds: Number.isFinite(fetchedAtMs)
+      ? Math.max(0, Math.floor((now - expiresAtMs) / 1000))
+      : null
   };
 }
 
-async function handleCurrencyConversion(req, res, rootDir, currencyDataPromise) {
+function respondConversionError(res, result) {
+  if (!result.error) {
+    return false;
+  }
+  respondJson(
+    res,
+    503,
+    {
+      message: result.error.message,
+      error: result.error,
+      dataAvailable: false
+    },
+    { "Retry-After": "60" }
+  );
+  return true;
+}
+
+async function handleCurrencyConversion(req, res, rootDir, currencyDataPromise, serviceOptions = {}) {
   const parsed = await readRequestJson(req, res);
   if (!parsed) {
     return;
@@ -103,11 +125,19 @@ async function handleCurrencyConversion(req, res, rootDir, currencyDataPromise) 
   const rateResult = await getRatesWithCache({
     rootDir,
     baseCurrency,
-    availableCurrencies: (await currencyDataPromise).map((currency) => currency.code)
+    requiredCurrencies: targetCurrencies,
+    fetchRates: serviceOptions.fetchRates
   });
+  if (respondConversionError(res, rateResult)) {
+    return;
+  }
   respondJson(res, 200, {
     message: `Converted ${amount} ${baseCurrency} into ${targetCurrencies.length} currencies.`,
     cached: rateResult.cached,
+    stale: rateResult.stale,
+    degraded: rateResult.degraded,
+    dataStatus: rateResult.dataStatus,
+    warning: rateResult.warning,
     source: rateResult.source,
     sourceSite: rateResult.sourceSite,
     fetchedAt: rateResult.fetchedAt,
@@ -117,7 +147,7 @@ async function handleCurrencyConversion(req, res, rootDir, currencyDataPromise) 
   });
 }
 
-async function handleMetalConversion(req, res, rootDir) {
+async function handleMetalConversion(req, res, rootDir, serviceOptions = {}) {
   const parsed = await readRequestJson(req, res);
   if (!parsed) {
     return;
@@ -148,10 +178,23 @@ async function handleMetalConversion(req, res, rootDir) {
     return;
   }
 
-  const rateResult = await getMetalPriceWithCache({ rootDir, metalSymbol, currency });
+  const rateResult = await getMetalPriceWithCache({
+    rootDir,
+    metalSymbol,
+    currency,
+    fetchPrice: serviceOptions.fetchMetalPrice,
+    fetchImpl: serviceOptions.fetchImpl
+  });
+  if (respondConversionError(res, rateResult)) {
+    return;
+  }
   respondJson(res, 200, {
     message: `Converted ${amount} ${metalSymbol} into ${currency}.`,
     cached: rateResult.cached,
+    stale: rateResult.stale,
+    degraded: rateResult.degraded,
+    dataStatus: rateResult.dataStatus,
+    warning: rateResult.warning,
     source: rateResult.source,
     sourceSite: rateResult.sourceSite,
     fetchedAt: rateResult.fetchedAt,
@@ -213,7 +256,14 @@ function appHandler(rootDir, currenciesPromise, options = {}) {
         rejectRateLimitedRequest(res, rateLimit);
         return;
       }
-      await handleMetalConversion(req, res, rootDir);
+      try {
+        await handleMetalConversion(req, res, rootDir, options);
+      } catch {
+        respondJson(res, 500, {
+          message: "Unable to complete the metal conversion.",
+          error: { code: "INTERNAL_ERROR", retryable: true }
+        });
+      }
       return;
     }
     if (req.method === "POST" && CURRENCY_CONVERSION_ROUTES.has(url)) {
@@ -222,7 +272,14 @@ function appHandler(rootDir, currenciesPromise, options = {}) {
         rejectRateLimitedRequest(res, rateLimit);
         return;
       }
-      await handleCurrencyConversion(req, res, rootDir, currencyDataPromise);
+      try {
+        await handleCurrencyConversion(req, res, rootDir, currencyDataPromise, options);
+      } catch {
+        respondJson(res, 500, {
+          message: "Unable to complete the currency conversion.",
+          error: { code: "INTERNAL_ERROR", retryable: true }
+        });
+      }
       return;
     }
     if (req.method !== "GET") {

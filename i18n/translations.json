@@ -40,6 +40,9 @@
     "messageSubmitError": "Could not submit form.",
     "freshResultMessage": "Pulled fresh from {site} @ {dateTime}.",
     "cachedResultMessage": "Using cached results from {dateTime} @ {cacheDate}.",
+    "staleDataWarning": "Live data is unavailable. This result uses the most recent cached data and may be stale.",
+    "veryStaleDataWarning": "Live data is unavailable. This cached data is more than 24 hours old and must not be treated as current.",
+    "cacheWriteWarning": "Live data is available, but it could not be saved for later requests.",
     "unknownDate": "unknown date",
     "defaultApiSite": "API"
   },
@@ -84,6 +87,9 @@
     "messageSubmitError": "Impossible d'envoyer le formulaire.",
     "freshResultMessage": "Données fraîches depuis {site} @ {dateTime}.",
     "cachedResultMessage": "Résultats en cache du {dateTime} @ {cacheDate}.",
+    "staleDataWarning": "Les données en direct sont indisponibles. Ce résultat utilise les dernières données en cache et peut être obsolète.",
+    "veryStaleDataWarning": "Les données en direct sont indisponibles. Ces données en cache datent de plus de 24 heures et ne doivent pas être considérées comme actuelles.",
+    "cacheWriteWarning": "Les données en direct sont disponibles, mais n'ont pas pu être enregistrées pour les prochaines requêtes.",
     "unknownDate": "date inconnue",
     "defaultApiSite": "API"
   },
@@ -128,6 +134,9 @@
     "messageSubmitError": "Formular konnte nicht gesendet werden.",
     "freshResultMessage": "Frisch geladen von {site} @ {dateTime}.",
     "cachedResultMessage": "Zwischengespeicherte Ergebnisse von {dateTime} @ {cacheDate}.",
+    "staleDataWarning": "Live-Daten sind nicht verfügbar. Dieses Ergebnis verwendet die neuesten zwischengespeicherten Daten und kann veraltet sein.",
+    "veryStaleDataWarning": "Live-Daten sind nicht verfügbar. Diese zwischengespeicherten Daten sind älter als 24 Stunden und dürfen nicht als aktuell betrachtet werden.",
+    "cacheWriteWarning": "Live-Daten sind verfügbar, konnten aber nicht für spätere Anfragen gespeichert werden.",
     "unknownDate": "unbekanntes Datum",
     "defaultApiSite": "API"
   },
@@ -172,6 +181,9 @@
     "messageSubmitError": "No se pudo enviar el formulario.",
     "freshResultMessage": "Datos nuevos desde {site} @ {dateTime}.",
     "cachedResultMessage": "Resultados en caché de {dateTime} @ {cacheDate}.",
+    "staleDataWarning": "Los datos en directo no están disponibles. Este resultado usa los datos almacenados más recientes y puede estar desactualizado.",
+    "veryStaleDataWarning": "Los datos en directo no están disponibles. Estos datos almacenados tienen más de 24 horas y no deben tratarse como actuales.",
+    "cacheWriteWarning": "Los datos en directo están disponibles, pero no se pudieron guardar para futuras solicitudes.",
     "unknownDate": "fecha desconocida",
     "defaultApiSite": "API"
   }

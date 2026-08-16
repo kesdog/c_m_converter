@@ -5,7 +5,9 @@ const CACHE_FILE = "rates-cache.json";
 const METALS_CACHE_FILE = "metals-cache.json";
 const PRIMARY_API_SITE = "freecurrencyapi.com";
 const PRIMARY_METALS_API_SITE = "gold-api.com";
-const CACHE_TTL_MS = 3 * 60 * 60 * 1000;
+const CACHE_TTL_MS = 60 * 60 * 1000;
+const STALE_WARNING_RED_AFTER_MS = 24 * 60 * 60 * 1000;
+const PROVIDER_TIMEOUT_MS = 10 * 1000;
 const MAX_CACHE_BYTES = 25 * 1024 * 1024;
 const TROY_OUNCE_IN_GRAMS = 31.1034768;
 const SUPPORTED_METAL_UNITS = ["oz", "g"];
@@ -61,10 +63,16 @@ function getJsonSizeBytes(data) {
   return Buffer.byteLength(JSON.stringify(data), "utf8");
 }
 
-function pruneCurrencyCache(cache, now = Date.now()) {
-  const nextCache = { byBase: { ...(cache.byBase || {}) } };
+function pruneCurrencyCache(cache = {}) {
+  const nextCache = { byBase: { ...((cache && cache.byBase) || {}) } };
   for (const [baseCurrency, entry] of Object.entries(nextCache.byBase)) {
-    if (!entry || !isFreshTimestamp(entry.fetchedAt, now)) {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !entry.rates ||
+      typeof entry.rates !== "object" ||
+      !Number.isFinite(new Date(entry.fetchedAt).getTime())
+    ) {
       delete nextCache.byBase[baseCurrency];
     }
   }
@@ -79,13 +87,26 @@ function pruneCurrencyCache(cache, now = Date.now()) {
   return nextCache;
 }
 
-function pruneMetalsCache(cache, now = Date.now()) {
+function getMetalTimestamp(priceData, entry) {
+  return priceData.fetchedAt || entry.fetchedAt || priceData.updatedAt;
+}
+
+function pruneMetalsCache(cache = {}) {
   const nextCache = { byMetal: {} };
-  for (const [metalSymbol, entry] of Object.entries(cache.byMetal || {})) {
+  for (const [metalSymbol, entry] of Object.entries((cache && cache.byMetal) || {})) {
+    if (!entry || typeof entry !== "object" || !entry.prices || typeof entry.prices !== "object") {
+      continue;
+    }
     const prices = {};
     for (const [currency, priceData] of Object.entries(entry.prices || {})) {
-      const timestamp = priceData.updatedAt || priceData.fetchedAt || entry.fetchedAt;
-      if (isFreshTimestamp(timestamp, now)) {
+      const timestamp = getMetalTimestamp(priceData || {}, entry);
+      if (
+        priceData &&
+        typeof priceData === "object" &&
+        Number.isFinite(Number(priceData.price)) &&
+        Number(priceData.price) > 0 &&
+        Number.isFinite(new Date(timestamp).getTime())
+      ) {
         prices[currency] = priceData;
       }
     }
@@ -100,7 +121,7 @@ function pruneMetalsCache(cache, now = Date.now()) {
       entries.push({
         metalSymbol,
         currency,
-        timestamp: new Date(priceData.updatedAt || priceData.fetchedAt || entry.fetchedAt || 0).getTime()
+        timestamp: new Date(getMetalTimestamp(priceData, entry) || 0).getTime()
       });
     }
   }
@@ -129,44 +150,86 @@ function resolveApiKey(rawValue) {
   }
 }
 
-function buildMockRates(baseCurrency, targetCurrencies) {
-  const seed = baseCurrency.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return Object.fromEntries(
-    targetCurrencies.map((code) => {
-      const codeSeed = code.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
-      return [code, Number((((seed + codeSeed) % 250 / 100 + 0.5).toFixed(6)))];
-    })
-  );
-}
-
-function buildMockMetalPrice(metalSymbol, currency) {
-  const seed = `${metalSymbol}:${currency}`
-    .split("")
-    .reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  const metal = SUPPORTED_METALS.find((entry) => entry.symbol === metalSymbol);
-  return {
-    currency,
-    currencySymbol: currency,
-    exchangeRate: 1,
-    name: metal ? metal.name : metalSymbol,
-    price: Number((((seed % 9000) + 1000) / 10).toFixed(4)),
-    symbol: metalSymbol,
-    updatedAt: new Date().toISOString()
-  };
-}
-
 function getCachePath(rootDir, fileName) {
   return path.join(rootDir, process.env.CACHE_DIR || "data", fileName);
 }
 
-async function getRatesWithCache({ rootDir, baseCurrency, availableCurrencies }) {
+function buildWarning(code, message) {
+  return { code, message };
+}
+
+function buildStaleWarning(dataType, fetchedAt) {
+  const ageMs = Math.max(0, Date.now() - new Date(fetchedAt).getTime());
+  const severity = ageMs > STALE_WARNING_RED_AFTER_MS ? "red" : "orange";
+  const label = dataType === "metal" ? "metal pricing" : "currency rates";
+  return {
+    code: "LIVE_DATA_UNAVAILABLE_USING_STALE_CACHE",
+    severity,
+    ageSeconds: Math.floor(ageMs / 1000),
+    message: `Live ${label} are unavailable. Using the most recent cached data; values may be stale.`
+  };
+}
+
+function buildUnavailableError(message) {
+  return {
+    code: "UPSTREAM_UNAVAILABLE_NO_CACHE",
+    message,
+    retryable: true
+  };
+}
+
+function normalizeRates(rawRates, requiredCurrencies = []) {
+  if (!rawRates || typeof rawRates !== "object" || Array.isArray(rawRates)) {
+    return null;
+  }
+  const rates = {};
+  for (const [code, rawRate] of Object.entries(rawRates)) {
+    const rate = Number(rawRate);
+    if (Number.isFinite(rate) && rate > 0) {
+      rates[code.toUpperCase()] = rate;
+    }
+  }
+  if (requiredCurrencies.some((code) => !Number.isFinite(rates[code]) || rates[code] <= 0)) {
+    return null;
+  }
+  return Object.keys(rates).length ? rates : null;
+}
+
+function withTimeout(promise, timeoutMs) {
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => reject(new Error("Provider request timed out.")), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeout));
+}
+
+async function fetchCurrencyRatesFromProvider({ apiKey, baseCurrency }) {
+  if (!apiKey) {
+    throw new Error("Currency provider is not configured.");
+  }
+  return withTimeout(
+    (async () => {
+      const client = new (await getFreecurrencyapiClass())(apiKey);
+      const response = await client.latest({ base_currency: baseCurrency });
+      return response && response.data;
+    })(),
+    PROVIDER_TIMEOUT_MS
+  );
+}
+
+async function getRatesWithCache({ rootDir, baseCurrency, requiredCurrencies = [], fetchRates }) {
   const cachePath = getCachePath(rootDir, CACHE_FILE);
   const cache = pruneCurrencyCache(await readJson(cachePath, { byBase: {} }));
   const cachedEntry = cache.byBase[baseCurrency];
-  if (cachedEntry) {
+  const cachedRates = normalizeRates(cachedEntry?.rates, requiredCurrencies);
+  if (cachedEntry && cachedRates && isFreshTimestamp(cachedEntry.fetchedAt)) {
     return {
-      rates: cachedEntry.rates || {},
+      rates: cachedRates,
       cached: true,
+      stale: false,
+      degraded: false,
+      dataStatus: "fresh-cache",
+      warning: null,
       source: cachedEntry.source || "cache",
       sourceSite: cachedEntry.sourceSite || PRIMARY_API_SITE,
       fetchedAt: cachedEntry.fetchedAt,
@@ -175,89 +238,179 @@ async function getRatesWithCache({ rootDir, baseCurrency, availableCurrencies })
   }
 
   const fetchedAt = new Date().toISOString();
-  let rates = null;
-  let source = "mock";
-  let sourceSite = "local-mock";
   const apiKey = resolveApiKey(process.env.FREECURRENCY_API_KEY || process.env.EXCHANGE_RATE_API_KEY);
-  if (apiKey) {
-    try {
-      const client = new (await getFreecurrencyapiClass())(apiKey);
-      // Omitting currencies fetches the provider's complete set in one call per base currency.
-      const response = await client.latest({ base_currency: baseCurrency });
-      if (response && response.data && typeof response.data === "object") {
-        rates = response.data;
-        source = "freecurrencyapi";
-        sourceSite = PRIMARY_API_SITE;
-      }
-    } catch {
-      rates = null;
+  try {
+    const rawRates = fetchRates
+      ? await fetchRates({ baseCurrency, requiredCurrencies })
+      : await fetchCurrencyRatesFromProvider({ apiKey, baseCurrency });
+    const rates = normalizeRates(rawRates, requiredCurrencies);
+    if (!rates) {
+      throw new Error("Currency provider returned incomplete or invalid rates.");
     }
+    const nextEntry = {
+      baseCurrency,
+      rates,
+      source: "freecurrencyapi",
+      sourceSite: PRIMARY_API_SITE,
+      fetchedAt
+    };
+    let warning = null;
+    try {
+      cache.byBase[baseCurrency] = nextEntry;
+      await writeJsonAtomic(cachePath, pruneCurrencyCache(cache));
+    } catch {
+      warning = buildWarning(
+        "CACHE_WRITE_FAILED",
+        "Live currency rates are available, but the latest data could not be saved for later requests."
+      );
+    }
+    return {
+      rates,
+      cached: false,
+      stale: false,
+      degraded: Boolean(warning),
+      dataStatus: "live",
+      warning,
+      source: "freecurrencyapi",
+      sourceSite: PRIMARY_API_SITE,
+      fetchedAt,
+      cacheDate: getCacheDateFromTimestamp(fetchedAt)
+    };
+  } catch {
+    if (cachedEntry && cachedRates) {
+      return {
+        rates: cachedRates,
+        cached: true,
+        stale: true,
+        degraded: true,
+        dataStatus: "stale-cache",
+        warning: buildStaleWarning("currency", cachedEntry.fetchedAt),
+        source: cachedEntry.source || "cache",
+        sourceSite: cachedEntry.sourceSite || PRIMARY_API_SITE,
+        fetchedAt: cachedEntry.fetchedAt,
+        cacheDate: getCacheDateFromTimestamp(cachedEntry.fetchedAt)
+      };
+    }
+    return { error: buildUnavailableError("Live currency rates are unavailable and no cached rates are available.") };
   }
-  rates = rates || buildMockRates(baseCurrency, availableCurrencies);
-  cache.byBase[baseCurrency] = { baseCurrency, rates, source, sourceSite, fetchedAt };
-  await writeJsonAtomic(cachePath, pruneCurrencyCache(cache));
-  return { rates, cached: false, source, sourceSite, fetchedAt, cacheDate: getCacheDateFromTimestamp(fetchedAt) };
 }
 
-async function getMetalPriceWithCache({ rootDir, metalSymbol, currency }) {
+async function fetchMetalPriceFromProvider({ metalSymbol, currency, fetchImpl = fetch }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(
+      `https://api.gold-api.com/price/${encodeURIComponent(metalSymbol)}/${encodeURIComponent(currency)}`,
+      { signal: controller.signal }
+    );
+    if (!response.ok) {
+      throw new Error(`Metal provider returned HTTP ${response.status}.`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function normalizeMetalPrice(rawPrice, metalSymbol, currency, fetchedAt) {
+  if (!rawPrice || typeof rawPrice !== "object") {
+    return null;
+  }
+  const price = Number(rawPrice.price);
+  if (!Number.isFinite(price) || price <= 0) {
+    return null;
+  }
+  return {
+    ...rawPrice,
+    currency: rawPrice.currency || currency,
+    currencySymbol: rawPrice.currencySymbol || currency,
+    exchangeRate: Number.isFinite(Number(rawPrice.exchangeRate)) ? Number(rawPrice.exchangeRate) : 1,
+    name: rawPrice.name || metalSymbol,
+    price,
+    symbol: rawPrice.symbol || metalSymbol,
+    fetchedAt
+  };
+}
+
+async function getMetalPriceWithCache({ rootDir, metalSymbol, currency, fetchPrice, fetchImpl }) {
   const cachePath = getCachePath(rootDir, METALS_CACHE_FILE);
   const cache = pruneMetalsCache(await readJson(cachePath, { byMetal: {} }));
   const metalEntry = cache.byMetal[metalSymbol];
   const cachedPrice = metalEntry && metalEntry.prices && metalEntry.prices[currency];
-  if (cachedPrice) {
-    const fetchedAt = cachedPrice.updatedAt || cachedPrice.fetchedAt || metalEntry.fetchedAt;
+  const cachedFetchedAt = cachedPrice && getMetalTimestamp(cachedPrice, metalEntry);
+  if (cachedPrice && isFreshTimestamp(cachedFetchedAt)) {
     return {
       priceData: cachedPrice,
       cached: true,
+      stale: false,
+      degraded: false,
+      dataStatus: "fresh-cache",
+      warning: null,
       source: metalEntry.source || "cache",
       sourceSite: metalEntry.sourceSite || PRIMARY_METALS_API_SITE,
-      fetchedAt,
-      cacheDate: getCacheDateFromTimestamp(fetchedAt)
+      fetchedAt: cachedFetchedAt,
+      cacheDate: getCacheDateFromTimestamp(cachedFetchedAt)
     };
   }
 
   const fetchedAt = new Date().toISOString();
-  let priceData = null;
-  let source = "gold-api";
-  let sourceSite = PRIMARY_METALS_API_SITE;
   try {
-    const response = await fetch(
-      `https://api.gold-api.com/price/${encodeURIComponent(metalSymbol)}/${encodeURIComponent(currency)}`
-    );
-    const payload = response.ok ? await response.json() : null;
-    if (payload && typeof payload.price === "number") {
-      priceData = payload;
+    const rawPrice = fetchPrice
+      ? await fetchPrice({ metalSymbol, currency })
+      : await fetchMetalPriceFromProvider({ metalSymbol, currency, fetchImpl });
+    const priceData = normalizeMetalPrice(rawPrice, metalSymbol, currency, fetchedAt);
+    if (!priceData) {
+      throw new Error("Metal provider returned an invalid price.");
     }
+    cache.byMetal[metalSymbol] = {
+      prices: { ...(metalEntry?.prices || {}), [currency]: priceData },
+      source: "gold-api",
+      sourceSite: PRIMARY_METALS_API_SITE,
+      fetchedAt
+    };
+    let warning = null;
+    try {
+      await writeJsonAtomic(cachePath, pruneMetalsCache(cache));
+    } catch {
+      warning = buildWarning(
+        "CACHE_WRITE_FAILED",
+        "Live metal pricing is available, but the latest data could not be saved for later requests."
+      );
+    }
+    return {
+      priceData,
+      cached: false,
+      stale: false,
+      degraded: Boolean(warning),
+      dataStatus: "live",
+      warning,
+      source: "gold-api",
+      sourceSite: PRIMARY_METALS_API_SITE,
+      fetchedAt,
+      cacheDate: getCacheDateFromTimestamp(fetchedAt)
+    };
   } catch {
-    priceData = null;
+    if (cachedPrice && Number.isFinite(Number(cachedPrice.price)) && Number(cachedPrice.price) > 0) {
+      return {
+        priceData: cachedPrice,
+        cached: true,
+        stale: true,
+        degraded: true,
+        dataStatus: "stale-cache",
+        warning: buildStaleWarning("metal", cachedFetchedAt),
+        source: metalEntry.source || "cache",
+        sourceSite: metalEntry.sourceSite || PRIMARY_METALS_API_SITE,
+        fetchedAt: cachedFetchedAt,
+        cacheDate: getCacheDateFromTimestamp(cachedFetchedAt)
+      };
+    }
+    return { error: buildUnavailableError("Live metal pricing is unavailable and no cached price is available.") };
   }
-  if (!priceData) {
-    priceData = buildMockMetalPrice(metalSymbol, currency);
-    source = "mock";
-    sourceSite = "local-mock";
-  }
-
-  const nextPriceData = { ...priceData, fetchedAt: priceData.fetchedAt || priceData.updatedAt || fetchedAt };
-  cache.byMetal[metalSymbol] = {
-    prices: { ...(metalEntry?.prices || {}), [currency]: nextPriceData },
-    source,
-    sourceSite,
-    fetchedAt: nextPriceData.fetchedAt
-  };
-  await writeJsonAtomic(cachePath, pruneMetalsCache(cache));
-  return {
-    priceData: nextPriceData,
-    cached: false,
-    source,
-    sourceSite,
-    fetchedAt: nextPriceData.fetchedAt,
-    cacheDate: getCacheDateFromTimestamp(nextPriceData.fetchedAt)
-  };
 }
 
 function mapConversions(amount, targetCurrencies, rates) {
   return targetCurrencies.map((code) => {
-    const rate = Number(rates[code] || 0);
+    const rate = Number(rates[code]);
     return { code, rate, convertedAmount: Number((amount * rate).toFixed(4)) };
   });
 }
@@ -290,6 +443,7 @@ function buildMetalConversion({ amount, metalSymbol, currency, priceData, unit, 
 
 module.exports = {
   CACHE_TTL_MS,
+  PROVIDER_TIMEOUT_MS,
   SUPPORTED_METALS,
   SUPPORTED_METAL_UNITS,
   SUPPORTED_METAL_OPERATIONS,
